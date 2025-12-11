@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Peer, { DataConnection } from 'peerjs';
-import { Send, Download, ShieldCheck, FileCheck, XCircle, Loader2, Wifi, Image as ImageIcon, FileText, Smartphone, Share2, Play, UploadCloud } from 'lucide-react';
+import { Send, Download, ShieldCheck, FileCheck, XCircle, Loader2, Wifi, Image as ImageIcon, FileText, Smartphone, Share2, Play, UploadCloud, RefreshCw } from 'lucide-react';
 import { Footer } from './components/Footer';
 import { Modal } from './components/Modal';
 import { TransferState, FileMetadata, DataPacket, QueuedFile } from './types';
@@ -18,7 +18,7 @@ const formatBytes = (bytes: number, decimals = 2) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 };
 
-const CHUNK_SIZE = 16 * 1024; // 16KB chunks for stability
+const CHUNK_SIZE = 16 * 1024; // 16KB chunks for max reliability
 
 const App: React.FC = () => {
   // --- State Management ---
@@ -84,12 +84,16 @@ const App: React.FC = () => {
       setMyId(id);
       
       const peer = new Peer(id, {
-        debug: 1,
+        debug: 1, // 0=none, 1=errors, 2=warnings, 3=all
         config: {
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
             { urls: 'stun:global.stun.twilio.com:3478' }
-          ]
+          ],
+          sdpSemantics: 'unified-plan', // Modern WebRTC standard
+          iceCandidatePoolSize: 10, // Pre-fetch candidates for faster local connection
         }
       });
 
@@ -202,7 +206,10 @@ const App: React.FC = () => {
     setStatus(TransferState.CONNECTING);
     setStatusMessage('Connecting...');
 
-    const conn = peerRef.current.connect(targetId, { reliable: true });
+    const conn = peerRef.current.connect(targetId, { 
+        reliable: true,
+        serialization: 'binary'
+    });
     
     conn.on('open', () => {
       connRef.current = conn;
@@ -299,10 +306,15 @@ const App: React.FC = () => {
     if (!connRef.current || !selectedFile) return;
 
     setStatus(TransferState.TRANSFERRING);
-    setStatusMessage('Sending original file...');
+    setStatusMessage('Starting transfer...');
     
     // 1. Send signal start
     connRef.current.send({ type: 'file-start' });
+
+    // Brief pause to ensure Receiver is ready to receive data
+    await new Promise(r => setTimeout(r, 500));
+
+    setStatusMessage('Sending file...');
 
     const file = selectedFile.file;
     let offset = 0;
@@ -328,8 +340,8 @@ const App: React.FC = () => {
         const percent = Math.min(100, Math.round((offset / file.size) * 100));
         setProgress(percent);
 
-        // Small delay to prevent buffer overflow/freeze UI
-        await new Promise(r => setTimeout(r, 5));
+        // Throttle slightly to prevent buffer overflow/freeze UI
+        await new Promise(r => setTimeout(r, 10));
     }
 
     // 3. Send end signal
@@ -428,6 +440,18 @@ const App: React.FC = () => {
             {status === TransferState.TRANSFERRING && (
                 <div className="w-full bg-gray-800 rounded-full h-2.5 mt-4 overflow-hidden relative z-10">
                     <div className="bg-blue-600 h-2.5 rounded-full transition-all duration-300" style={{ width: `${progress}%` }}></div>
+                </div>
+            )}
+            
+            {/* Show retry if stuck on 'Connecting to transfer...' in receiver mode */}
+            {status === TransferState.TRANSFERRING && statusMessage.includes('Connecting to transfer') && (
+                <div className="mt-4 relative z-10">
+                    <button 
+                        onClick={acceptTransfer}
+                        className="text-sm bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-full flex items-center gap-2 mx-auto transition-colors"
+                    >
+                        <RefreshCw size={14} /> Retry Connection
+                    </button>
                 </div>
             )}
         </div>
