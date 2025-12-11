@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Peer, { DataConnection } from 'peerjs';
-import { Send, Download, ShieldCheck, FileCheck, XCircle, Loader2, Wifi, Image as ImageIcon, FileText, Smartphone } from 'lucide-react';
+import { Send, Download, ShieldCheck, FileCheck, XCircle, Loader2, Wifi, Image as ImageIcon, FileText, Smartphone, Share2 } from 'lucide-react';
 import { Footer } from './components/Footer';
 import { Modal } from './components/Modal';
 import { TransferState, FileMetadata, DataPacket, QueuedFile } from './types';
@@ -35,7 +35,7 @@ const App: React.FC = () => {
   // --- Refs for PeerJS and cleanup ---
   const peerRef = useRef<Peer | null>(null);
   const connRef = useRef<DataConnection | null>(null);
-  const receivedChunks = useRef<Blob[]>([]);
+  const incomingMetaRef = useRef<FileMetadata | null>(null); // Ref for access inside event listener
 
   // --- Safety: Prevent accidental close ---
   useEffect(() => {
@@ -48,6 +48,11 @@ const App: React.FC = () => {
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [status, receivedFileUrl]);
+
+  // Sync state to ref for callbacks
+  useEffect(() => {
+    incomingMetaRef.current = incomingMeta;
+  }, [incomingMeta]);
 
   // --- Initialization ---
   useEffect(() => {
@@ -71,8 +76,8 @@ const App: React.FC = () => {
       });
 
       peer.on('connection', (conn) => {
-        // Someone is connecting to us
-        handleConnection(conn);
+        // Incoming connection (Receiver side logic setup)
+        handleIncomingConnection(conn);
       });
 
       peer.on('error', (err) => {
@@ -80,7 +85,8 @@ const App: React.FC = () => {
         if (err.type === 'unavailable-id') {
           initPeer(); // Retry with new ID if collision
         } else {
-          setStatusMessage('Connection error. Please refresh.');
+          setStatusMessage('Connection error. Refreshing...');
+          setTimeout(initPeer, 2000);
         }
       });
 
@@ -95,58 +101,72 @@ const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- Connection Handling ---
-  const handleConnection = (conn: DataConnection) => {
+  // --- Connection Logic for RECEIVER ---
+  const handleIncomingConnection = (conn: DataConnection) => {
     connRef.current = conn;
     setStatus(TransferState.CONNECTED);
-    setStatusMessage(`Connected to ${conn.peer}`);
-    setActiveTab('receive'); // Switch to receive tab if someone connects
+    setStatusMessage(`Connected to sender`);
+    setActiveTab('receive');
 
     conn.on('data', (data: any) => {
+      // 1. Handle Binary Data (The File)
+      if (data instanceof ArrayBuffer || data instanceof Blob) {
+        if (incomingMetaRef.current) {
+             const blob = new Blob([data], { type: incomingMetaRef.current.type });
+             const url = URL.createObjectURL(blob);
+             setReceivedFileUrl(url);
+             setStatus(TransferState.COMPLETED);
+             setStatusMessage('File received successfully!');
+             setProgress(100);
+        }
+        return;
+      }
+
+      // 2. Handle JSON Control Packets
       const packet = data as DataPacket;
       
       if (packet.type === 'file-meta') {
         setIncomingMeta(packet.payload);
         setStatus(TransferState.WAITING_APPROVAL);
       } 
-      else if (packet.type === 'file-chunk') {
-        // Simple blob push - for extremely large files in production, ArrayBuffer handling is more robust
-        // but PeerJS handles standard Blob/ArrayBuffer serialization well for this scope.
-        // NOTE: PeerJS might receive the file as a whole Blob if sent as one.
-        // If the sender sent a raw file, PeerJS delivers it as a Blob or ArrayBuffer.
-      }
-      else if (packet.type === 'file-whole') {
-         // Direct file received
-         const blob = new Blob([packet.payload.body], { type: packet.payload.mime });
-         const url = URL.createObjectURL(blob);
-         setReceivedFileUrl(url);
-         setStatus(TransferState.COMPLETED);
-         setStatusMessage('File received successfully!');
-      }
-      else if (packet.type === 'approve') {
-        startUpload();
+      else if (packet.type === 'file-start') {
+        setStatus(TransferState.TRANSFERRING);
+        setStatusMessage('Receiving file...');
+        // Fake progress for receiver visual
+        let p = 0;
+        const interval = setInterval(() => {
+            p += 5;
+            if (p > 90) clearInterval(interval);
+            setProgress(p);
+        }, 100);
       }
       else if (packet.type === 'reject') {
         setStatus(TransferState.IDLE);
-        setStatusMessage('Receiver rejected the transfer.');
-        conn.close();
+        setStatusMessage('Transfer cancelled.');
+        setIncomingMeta(null);
       }
     });
 
     conn.on('close', () => {
       setStatus(TransferState.IDLE);
-      setStatusMessage('Connection closed.');
+      setStatusMessage('Sender disconnected.');
       connRef.current = null;
+    });
+
+    conn.on('error', () => {
+        setStatus(TransferState.FAILED);
+        setStatusMessage('Connection error occurred.');
     });
   };
 
+  // --- Connection Logic for SENDER ---
   const connectToPeer = () => {
     if (!targetId || !peerRef.current) return;
     
     setStatus(TransferState.CONNECTING);
     setStatusMessage('Connecting...');
 
-    const conn = peerRef.current.connect(targetId);
+    const conn = peerRef.current.connect(targetId, { reliable: true });
     
     conn.on('open', () => {
       connRef.current = conn;
@@ -160,23 +180,30 @@ const App: React.FC = () => {
         startUpload();
       } else if (packet.type === 'reject') {
         setStatus(TransferState.FAILED);
-        setStatusMessage('Request was rejected.');
+        setStatusMessage('Receiver rejected the request.');
         setTimeout(() => setStatus(TransferState.CONNECTED), 2000);
       }
     });
 
     conn.on('error', (err) => {
       setStatus(TransferState.FAILED);
-      setStatusMessage('Connection failed. ID might be wrong.');
+      setStatusMessage('Connection failed. Check ID.');
     });
     
-    // Safety timeout
+    conn.on('close', () => {
+        if (status !== TransferState.COMPLETED) {
+             setStatus(TransferState.IDLE);
+             setStatusMessage('Connection closed.');
+        }
+    });
+
+    // Timeout safety
     setTimeout(() => {
         if(connRef.current?.open === false) {
              setStatus(TransferState.FAILED);
              setStatusMessage('Connection timed out. Check ID.');
         }
-    }, 5000)
+    }, 8000);
   };
 
   // --- File Selection ---
@@ -197,7 +224,6 @@ const App: React.FC = () => {
   const requestSend = () => {
     if (!connRef.current || !selectedFile) return;
     
-    // Send metadata first
     const meta: FileMetadata = {
       name: selectedFile.file.name,
       size: selectedFile.file.size,
@@ -217,24 +243,17 @@ const App: React.FC = () => {
     if (!connRef.current || !selectedFile) return;
 
     setStatus(TransferState.TRANSFERRING);
-    setStatusMessage('Sending original file without compression...');
+    setStatusMessage('Sending original file...');
     
-    // Send the file as a single blob for simplicity and integrity (PeerJS handles chunking internally)
-    // To ensure "no resolution loss", we just pass the file object directly.
-    
+    // 1. Send signal that file is coming
+    connRef.current.send({ type: 'file-start' });
+
+    // 2. Send the raw file blob directly. PeerJS handles binary better than nested objects.
+    // This ensures no corruption and preserves original resolution.
     const file = selectedFile.file;
+    connRef.current.send(file);
     
-    // We wrap it to give a type hint to receiver
-    connRef.current.send({
-        type: 'file-whole',
-        payload: {
-            body: file,
-            mime: file.type
-        }
-    });
-    
-    // Fake progress since PeerJS doesn't give upload progress callback easily without custom chunking
-    // We simulate it for UX
+    // Fake progress simulation for UX (since we send one large blob)
     let p = 0;
     const interval = setInterval(() => {
         p += 10;
@@ -242,25 +261,20 @@ const App: React.FC = () => {
         setProgress(p);
     }, 200);
 
-    // Assuming it sends reasonably fast for P2P (limited by upload speed)
-    // In a real robust app, we'd implement custom chunker to track real progress.
-    // For this prompt, sending the blob ensures integrity.
-    
-    // PeerJS data channel is reliable (SCTP), so if it arrives, it's intact.
-    // We wait for a "received" ack in a full implementation, but here we assume success if no error.
     setTimeout(() => {
         clearInterval(interval);
         setProgress(100);
         setStatus(TransferState.COMPLETED);
         setStatusMessage('Sent Successfully!');
-    }, 2000); // Artificial delay to show "Finished"
+    }, 2000);
   };
 
   const acceptTransfer = () => {
     if (!connRef.current) return;
+    // Send approval signal
     connRef.current.send({ type: 'approve' });
     setStatus(TransferState.TRANSFERRING);
-    setStatusMessage('Downloading original file...');
+    setStatusMessage('Waiting for data...');
   };
 
   const rejectTransfer = () => {
@@ -268,20 +282,24 @@ const App: React.FC = () => {
     connRef.current.send({ type: 'reject' });
     setIncomingMeta(null);
     setStatus(TransferState.IDLE);
+    setStatusMessage('Request declined.');
   };
 
   const reset = () => {
-    if (window.confirm("Are you sure? Any unsaved data will be lost.")) {
+    if (window.confirm("Start new transfer? Unsaved files will be lost.")) {
       setStatus(TransferState.IDLE);
       setIncomingMeta(null);
       setReceivedFileUrl(null);
       setSelectedFile(null);
       setProgress(0);
       setStatusMessage('Online and ready');
-      // Keep ID, but reset connection if needed
-      // connRef.current?.close(); 
     }
   };
+
+  const copyLink = () => {
+      navigator.clipboard.writeText("https://ptop-share.vercel.app/");
+      alert("Link copied!");
+  }
 
   // --- Render Helpers ---
   const renderStatusIcon = () => {
@@ -306,15 +324,20 @@ const App: React.FC = () => {
         <div className="max-w-4xl mx-auto flex justify-between items-center">
           <div className="flex items-center gap-2">
             <ShieldCheck className="text-green-400" size={28} />
-            <h1 className="text-xl font-bold bg-gradient-to-r from-green-400 to-blue-500 bg-clip-text text-transparent">
+            <h1 className="text-xl font-bold bg-gradient-to-r from-green-400 to-blue-500 bg-clip-text text-transparent hidden sm:block">
               PrivateShare
             </h1>
           </div>
-          <div className="bg-gray-800 px-3 py-1 rounded-full border border-gray-700">
-            <span className="text-xs text-gray-400 uppercase mr-2">Your Unique ID</span>
-            <span className="font-mono font-bold text-green-400 text-lg tracking-widest">
-              {myId || <span className="animate-pulse">...</span>}
-            </span>
+          <div className="flex gap-2">
+              <div className="bg-gray-800 px-3 py-1 rounded-full border border-gray-700 flex items-center">
+                <span className="text-xs text-gray-400 uppercase mr-2 hidden sm:inline">ID:</span>
+                <span className="font-mono font-bold text-green-400 text-lg tracking-widest">
+                  {myId || <span className="animate-pulse">...</span>}
+                </span>
+              </div>
+              <button onClick={copyLink} className="p-2 bg-gray-800 rounded-full border border-gray-700 hover:text-blue-400">
+                  <Share2 size={18} />
+              </button>
           </div>
         </div>
       </header>
@@ -356,7 +379,7 @@ const App: React.FC = () => {
         {activeTab === 'send' && (
             <div className="space-y-4 animate-fade-in">
                 {/* Connection Input (only if not connected) */}
-                {status === TransferState.IDLE || status === TransferState.FAILED ? (
+                {(status === TransferState.IDLE || status === TransferState.FAILED) && (
                     <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
                         <label className="block text-gray-400 text-sm mb-2">Receiver's 6-Digit ID</label>
                         <div className="flex gap-2">
@@ -376,7 +399,7 @@ const App: React.FC = () => {
                             </button>
                         </div>
                     </div>
-                ) : null}
+                )}
 
                 {/* File Picker (Once Connected) */}
                 {(status === TransferState.CONNECTED || status === TransferState.COMPLETED) && (
@@ -447,7 +470,7 @@ const App: React.FC = () => {
                  )}
 
                  {/* Incoming Request Modal */}
-                 <Modal isOpen={!!incomingMeta} title="Incoming File Request">
+                 <Modal isOpen={!!incomingMeta && status === TransferState.WAITING_APPROVAL} title="Incoming File Request">
                     <div className="flex flex-col items-center text-center">
                         {incomingMeta?.type.startsWith('image') ? <ImageIcon size={48} className="text-purple-500 mb-4" /> : <FileText size={48} className="text-blue-500 mb-4" />}
                         <p className="text-lg font-bold text-white mb-1 break-all">{incomingMeta?.name}</p>

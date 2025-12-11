@@ -15,7 +15,7 @@ export interface FileMetadata {
 }
 
 export interface DataPacket {
-  type: 'handshake' | 'approve' | 'reject' | 'file-meta' | 'file-chunk' | 'file-end' | 'file-whole';
+  type: 'handshake' | 'approve' | 'reject' | 'file-meta' | 'file-chunk' | 'file-end' | 'file-whole' | 'file-start';
   payload?: any;
 }
 
