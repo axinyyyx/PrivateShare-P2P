@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Peer, { DataConnection } from 'peerjs';
-import { Send, Download, ShieldCheck, FileCheck, XCircle, Loader2, Wifi, Image as ImageIcon, FileText, Smartphone, Share2, Play } from 'lucide-react';
+import { Send, Download, ShieldCheck, FileCheck, XCircle, Loader2, Wifi, Image as ImageIcon, FileText, Smartphone, Share2, Play, UploadCloud } from 'lucide-react';
 import { Footer } from './components/Footer';
 import { Modal } from './components/Modal';
 import { TransferState, FileMetadata, DataPacket, QueuedFile } from './types';
@@ -18,6 +18,8 @@ const formatBytes = (bytes: number, decimals = 2) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 };
 
+const CHUNK_SIZE = 16 * 1024; // 16KB chunks for stability
+
 const App: React.FC = () => {
   // --- State Management ---
   const [myId, setMyId] = useState<string>('');
@@ -25,6 +27,7 @@ const App: React.FC = () => {
   const [status, setStatus] = useState<TransferState>(TransferState.IDLE);
   const [statusMessage, setStatusMessage] = useState<string>('Initializing...');
   const [activeTab, setActiveTab] = useState<'send' | 'receive'>('send');
+  const [isDragging, setIsDragging] = useState(false);
   
   // File State
   const [selectedFile, setSelectedFile] = useState<QueuedFile | null>(null);
@@ -35,7 +38,9 @@ const App: React.FC = () => {
   // --- Refs for PeerJS and cleanup ---
   const peerRef = useRef<Peer | null>(null);
   const connRef = useRef<DataConnection | null>(null);
-  const incomingMetaRef = useRef<FileMetadata | null>(null); // Ref for access inside event listener
+  const incomingMetaRef = useRef<FileMetadata | null>(null);
+  const receivedChunksRef = useRef<Blob[]>([]);
+  const receivedSizeRef = useRef<number>(0);
   const heartbeatRef = useRef<number | null>(null);
 
   // --- Safety: Prevent accidental close ---
@@ -43,7 +48,7 @@ const App: React.FC = () => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (status === TransferState.TRANSFERRING || receivedFileUrl) {
         e.preventDefault();
-        e.returnValue = ''; // Legacy support
+        e.returnValue = '';
       }
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
@@ -79,12 +84,10 @@ const App: React.FC = () => {
       setMyId(id);
       
       const peer = new Peer(id, {
-        debug: 1, // Minimize logs
+        debug: 1,
         config: {
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
             { urls: 'stun:global.stun.twilio.com:3478' }
           ]
         }
@@ -96,14 +99,13 @@ const App: React.FC = () => {
       });
 
       peer.on('connection', (conn) => {
-        // Incoming connection (Receiver side logic setup)
         handleIncomingConnection(conn);
       });
 
       peer.on('error', (err) => {
         console.error('Peer error:', err);
         if (err.type === 'unavailable-id') {
-          initPeer(); // Retry with new ID if collision
+          initPeer();
         } else if (err.type === 'peer-unavailable') {
           setStatusMessage('Peer not found. Check ID.');
           setStatus(TransferState.FAILED);
@@ -133,23 +135,13 @@ const App: React.FC = () => {
     setActiveTab('receive');
     startHeartbeat(conn);
 
-    conn.on('data', (data: any) => {
-      // 1. Handle Binary Data (The File)
-      if (data instanceof ArrayBuffer || data instanceof Blob) {
-        if (incomingMetaRef.current) {
-             const blob = new Blob([data], { type: incomingMetaRef.current.type });
-             const url = URL.createObjectURL(blob);
-             setReceivedFileUrl(url);
-             setStatus(TransferState.COMPLETED);
-             setStatusMessage('File received successfully!');
-             setProgress(100);
-        }
-        return;
-      }
+    // Reset chunks
+    receivedChunksRef.current = [];
+    receivedSizeRef.current = 0;
 
-      // 2. Handle JSON Control Packets
+    conn.on('data', (data: any) => {
       const packet = data as DataPacket;
-      
+
       if (packet.type === 'file-meta') {
         setIncomingMeta(packet.payload);
         setStatus(TransferState.WAITING_APPROVAL);
@@ -157,13 +149,31 @@ const App: React.FC = () => {
       else if (packet.type === 'file-start') {
         setStatus(TransferState.TRANSFERRING);
         setStatusMessage('Receiving file...');
-        // Fake progress for receiver visual
-        let p = 0;
-        const interval = setInterval(() => {
-            p += 5;
-            if (p > 90) clearInterval(interval);
-            setProgress(p);
-        }, 100);
+        receivedChunksRef.current = [];
+        receivedSizeRef.current = 0;
+        setProgress(0);
+      }
+      else if (packet.type === 'file-chunk') {
+        // Handle chunk
+        const chunk = packet.payload; // ArrayBuffer
+        receivedChunksRef.current.push(new Blob([chunk]));
+        receivedSizeRef.current += chunk.byteLength;
+        
+        if (incomingMetaRef.current) {
+           const percent = Math.round((receivedSizeRef.current / incomingMetaRef.current.size) * 100);
+           setProgress(percent);
+        }
+      }
+      else if (packet.type === 'file-end') {
+        // Reassemble
+        if (incomingMetaRef.current) {
+            const blob = new Blob(receivedChunksRef.current, { type: incomingMetaRef.current.type });
+            const url = URL.createObjectURL(blob);
+            setReceivedFileUrl(url);
+            setStatus(TransferState.COMPLETED);
+            setStatusMessage('File received successfully!');
+            setProgress(100);
+        }
       }
       else if (packet.type === 'reject') {
         setStatus(TransferState.IDLE);
@@ -197,17 +207,17 @@ const App: React.FC = () => {
     conn.on('open', () => {
       connRef.current = conn;
       setStatus(TransferState.CONNECTED);
-      setStatusMessage('Connected! Select a file to send.');
+      setStatusMessage('Connected! Select a file.');
       startHeartbeat(conn);
     });
 
     conn.on('data', (data: any) => {
       const packet = data as DataPacket;
       if (packet.type === 'approve') {
-        startUpload();
+        startChunkedUpload();
       } else if (packet.type === 'reject') {
         setStatus(TransferState.FAILED);
-        setStatusMessage('Receiver rejected the request.');
+        setStatusMessage('Receiver rejected.');
         setTimeout(() => setStatus(TransferState.CONNECTED), 2000);
       }
     });
@@ -225,7 +235,6 @@ const App: React.FC = () => {
         }
     });
 
-    // Timeout safety
     setTimeout(() => {
         if(connRef.current?.open === false) {
              setStatus(TransferState.FAILED);
@@ -234,17 +243,36 @@ const App: React.FC = () => {
     }, 10000);
   };
 
-  // --- File Selection ---
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
+  // --- File Selection & Drag Drop ---
+  const processFile = (file: File) => {
       let previewUrl: string | undefined = undefined;
-
       if (file.type.startsWith('image/') || file.type.startsWith('video/')) {
         previewUrl = URL.createObjectURL(file);
       }
-
       setSelectedFile({ file, previewUrl });
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      processFile(e.target.files[0]);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      processFile(e.dataTransfer.files[0]);
     }
   };
 
@@ -267,34 +295,47 @@ const App: React.FC = () => {
     setStatusMessage('Waiting for acceptance...');
   };
 
-  const startUpload = () => {
+  const startChunkedUpload = async () => {
     if (!connRef.current || !selectedFile) return;
 
     setStatus(TransferState.TRANSFERRING);
     setStatusMessage('Sending original file...');
     
-    // 1. Send signal that file is coming
+    // 1. Send signal start
     connRef.current.send({ type: 'file-start' });
 
-    // 2. Send the raw file blob directly. PeerJS handles binary better than nested objects.
-    // This ensures no corruption and preserves original resolution.
     const file = selectedFile.file;
-    connRef.current.send(file);
-    
-    // Fake progress simulation for UX (since we send one large blob)
-    let p = 0;
-    const interval = setInterval(() => {
-        p += 10;
-        if (p > 95) clearInterval(interval);
-        setProgress(p);
-    }, 200);
+    let offset = 0;
 
-    setTimeout(() => {
-        clearInterval(interval);
-        setProgress(100);
-        setStatus(TransferState.COMPLETED);
-        setStatusMessage('Sent Successfully!');
-    }, 2000);
+    // 2. Loop and send chunks
+    while(offset < file.size) {
+        // If connection dropped, stop
+        if (!connRef.current.open) {
+            setStatus(TransferState.FAILED);
+            setStatusMessage('Connection lost during transfer');
+            return;
+        }
+
+        const chunk = file.slice(offset, offset + CHUNK_SIZE);
+        const buffer = await chunk.arrayBuffer();
+
+        connRef.current.send({
+            type: 'file-chunk',
+            payload: buffer
+        });
+
+        offset += CHUNK_SIZE;
+        const percent = Math.min(100, Math.round((offset / file.size) * 100));
+        setProgress(percent);
+
+        // Small delay to prevent buffer overflow/freeze UI
+        await new Promise(r => setTimeout(r, 5));
+    }
+
+    // 3. Send end signal
+    connRef.current.send({ type: 'file-end' });
+    setStatus(TransferState.COMPLETED);
+    setStatusMessage('Sent Successfully!');
   };
 
   const acceptTransfer = () => {
@@ -304,7 +345,6 @@ const App: React.FC = () => {
         return;
     }
     
-    // Send approval signal
     connRef.current.send({ type: 'approve' });
     setStatus(TransferState.TRANSFERRING);
     setStatusMessage('Connecting to transfer...');
@@ -411,22 +451,22 @@ const App: React.FC = () => {
         {/* Sender View */}
         {activeTab === 'send' && (
             <div className="space-y-4 animate-fade-in">
-                {/* Connection Input */}
+                {/* Connection Input - FIXED FOR MOBILE */}
                 {(status === TransferState.IDLE || status === TransferState.FAILED) && (
                     <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
                         <label className="block text-gray-400 text-sm mb-2">Receiver's 6-Digit ID</label>
-                        <div className="flex gap-2">
+                        <div className="flex gap-2 w-full">
                             <input 
                                 type="number" 
                                 placeholder="000000"
                                 value={targetId}
                                 onChange={(e) => setTargetId(e.target.value.slice(0, 6))}
-                                className="flex-1 bg-gray-950 border border-gray-700 text-white text-center text-2xl tracking-widest rounded-xl p-3 focus:outline-none focus:border-blue-500 transition-colors"
+                                className="flex-1 min-w-0 bg-gray-950 border border-gray-700 text-white text-center text-xl sm:text-2xl tracking-widest rounded-xl p-3 focus:outline-none focus:border-blue-500 transition-colors"
                             />
                             <button 
                                 onClick={connectToPeer}
                                 disabled={targetId.length !== 6}
-                                className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white p-3 rounded-xl transition-all"
+                                className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 sm:px-6 rounded-xl transition-all"
                             >
                                 <Wifi size={24} />
                             </button>
@@ -434,21 +474,25 @@ const App: React.FC = () => {
                     </div>
                 )}
 
-                {/* File Picker & Transfer Controls */}
+                {/* File Picker & Transfer Controls - DRAG & DROP ENABLED */}
                 {(status === TransferState.CONNECTED || status === TransferState.COMPLETED || status === TransferState.WAITING_APPROVAL) && (
-                    <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
+                    <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700"
+                         onDragOver={handleDragOver}
+                         onDragLeave={handleDragLeave}
+                         onDrop={handleDrop}
+                    >
                         {!selectedFile ? (
-                            <label className="flex flex-col items-center justify-center w-full h-40 border-2 border-gray-600 border-dashed rounded-xl cursor-pointer hover:bg-gray-800/80 transition-all hover:border-blue-500 group">
+                            <label className={`flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-xl cursor-pointer transition-all group ${isDragging ? 'border-blue-500 bg-blue-500/10' : 'border-gray-600 hover:bg-gray-800/80 hover:border-blue-500'}`}>
                                 <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                                    <Send className="w-10 h-10 mb-3 text-gray-400 group-hover:text-blue-500" />
-                                    <p className="mb-2 text-sm text-gray-400"><span className="font-semibold">Click to upload</span> file</p>
-                                    <p className="text-xs text-gray-500">Video, Image, APK, Zip (Original Quality)</p>
+                                    <UploadCloud className={`w-10 h-10 mb-3 ${isDragging ? 'text-blue-400' : 'text-gray-400 group-hover:text-blue-500'}`} />
+                                    <p className="mb-2 text-sm text-gray-400 text-center"><span className="font-semibold">Click to upload</span> or drag and drop</p>
+                                    <p className="text-xs text-gray-500">Original Resolution Preserved</p>
                                 </div>
                                 <input type="file" className="hidden" onChange={handleFileSelect} />
                             </label>
                         ) : (
                             <div className="space-y-4">
-                                <div className="relative rounded-xl overflow-hidden bg-gray-900 border border-gray-700">
+                                <div className="relative rounded-xl overflow-hidden bg-gray-900 border border-gray-700 group">
                                     {selectedFile.previewUrl ? (
                                         selectedFile.file.type.startsWith('video') ? (
                                             <video src={selectedFile.previewUrl} className="w-full h-48 object-contain bg-black" controls={false} />
@@ -478,7 +522,7 @@ const App: React.FC = () => {
                                     <div className="space-y-2">
                                         <p className="text-center text-sm text-yellow-500 animate-pulse">Waiting for receiver to accept...</p>
                                         <button 
-                                            onClick={startUpload}
+                                            onClick={startChunkedUpload}
                                             className="w-full bg-gray-700 hover:bg-gray-600 text-white text-sm font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2"
                                         >
                                             <Play size={16} />

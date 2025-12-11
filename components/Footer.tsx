@@ -11,7 +11,7 @@ export const Footer: React.FC = () => {
         rel="noopener noreferrer"
         className="flex items-center gap-2 text-gray-400 hover:text-pink-500 transition-colors duration-300"
       >
-        <span className="font-bold text-lg">@rishabhsahill</span>
+        <span className="font-bold text-lg"> @rishabhsahill</span>
         <Instagram size={20} />
       </a>
     </footer>
