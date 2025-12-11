@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="media/p2p.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>PrivateShare P2P by rishabhsahill</title>
+    <meta name="description" content="PrivateShare P2P - A secure, direct peer-to-peer file sharing tool developed by rishabhsahill. Share original resolution photos, videos, APKs, and files instantly without cloud storage." />
+    <meta name="keywords" content="rishabhsahill, PrivateShare, P2P file transfer, secure file share, original resolution photo share, send APK online, direct file transfer, no cloud storage, online file sharing" />
+    <meta name="author" content="rishabhsahill" />
+    <meta property="og:title" content="PrivateShare P2P by rishabhsahill" />
+    <meta property="og:description" content="Secure, direct peer-to-peer file sharing. No cloud storage, original quality preserved." />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              brand: {
+                dark: '#0f172a',
+                card: '#1e293b',
+                primary: '#3b82f6',
+                success: '#10b981',
+                danger: '#ef4444'
+              }
+            },
+            animation: {
+              'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+            }
+          }
+        }
+      }
+    </script>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://esm.sh/react@^19.2.1/",
+    "react": "https://esm.sh/react@^19.2.1",
+    "lucide-react": "https://esm.sh/lucide-react@^0.560.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.1/",
+    "peerjs": "https://esm.sh/peerjs@^1.5.5"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="bg-gray-950 text-white overflow-x-hidden antialiased">
+    <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
