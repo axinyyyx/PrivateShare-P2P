@@ -4,7 +4,7 @@ import { Instagram } from 'lucide-react';
 export const Footer: React.FC = () => {
   return (
     <footer className="w-full py-6 mt-8 border-t border-gray-800 flex justify-center items-center">
-      <span className="text-sm font-medium">Developed by</span>
+      <span className="text-sm font-medium">Developed by </span>
       <a 
         href="https://instagram.com/rishabhsahill" 
         target="_blank" 

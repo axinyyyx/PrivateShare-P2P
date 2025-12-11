@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Peer, { DataConnection } from 'peerjs';
-import { Send, Download, ShieldCheck, FileCheck, XCircle, Loader2, Wifi, Image as ImageIcon, FileText, Smartphone, Share2 } from 'lucide-react';
+import { Send, Download, ShieldCheck, FileCheck, XCircle, Loader2, Wifi, Image as ImageIcon, FileText, Smartphone, Share2, Play } from 'lucide-react';
 import { Footer } from './components/Footer';
 import { Modal } from './components/Modal';
 import { TransferState, FileMetadata, DataPacket, QueuedFile } from './types';
@@ -36,6 +36,7 @@ const App: React.FC = () => {
   const peerRef = useRef<Peer | null>(null);
   const connRef = useRef<DataConnection | null>(null);
   const incomingMetaRef = useRef<FileMetadata | null>(null); // Ref for access inside event listener
+  const heartbeatRef = useRef<number | null>(null);
 
   // --- Safety: Prevent accidental close ---
   useEffect(() => {
@@ -54,6 +55,23 @@ const App: React.FC = () => {
     incomingMetaRef.current = incomingMeta;
   }, [incomingMeta]);
 
+  // --- Heartbeat Logic ---
+  const startHeartbeat = (conn: DataConnection) => {
+    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+    heartbeatRef.current = window.setInterval(() => {
+      if (conn.open) {
+        conn.send({ type: 'heartbeat' });
+      }
+    }, 2000);
+  };
+
+  const stopHeartbeat = () => {
+    if (heartbeatRef.current) {
+      clearInterval(heartbeatRef.current);
+      heartbeatRef.current = null;
+    }
+  };
+
   // --- Initialization ---
   useEffect(() => {
     const initPeer = () => {
@@ -65,6 +83,8 @@ const App: React.FC = () => {
         config: {
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
             { urls: 'stun:global.stun.twilio.com:3478' }
           ]
         }
@@ -84,8 +104,11 @@ const App: React.FC = () => {
         console.error('Peer error:', err);
         if (err.type === 'unavailable-id') {
           initPeer(); // Retry with new ID if collision
+        } else if (err.type === 'peer-unavailable') {
+          setStatusMessage('Peer not found. Check ID.');
+          setStatus(TransferState.FAILED);
         } else {
-          setStatusMessage('Connection error. Refreshing...');
+          setStatusMessage('Connection unstable. Retrying...');
           setTimeout(initPeer, 2000);
         }
       });
@@ -96,6 +119,7 @@ const App: React.FC = () => {
     initPeer();
 
     return () => {
+      stopHeartbeat();
       peerRef.current?.destroy();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -107,6 +131,7 @@ const App: React.FC = () => {
     setStatus(TransferState.CONNECTED);
     setStatusMessage(`Connected to sender`);
     setActiveTab('receive');
+    startHeartbeat(conn);
 
     conn.on('data', (data: any) => {
       // 1. Handle Binary Data (The File)
@@ -148,6 +173,7 @@ const App: React.FC = () => {
     });
 
     conn.on('close', () => {
+      stopHeartbeat();
       setStatus(TransferState.IDLE);
       setStatusMessage('Sender disconnected.');
       connRef.current = null;
@@ -172,6 +198,7 @@ const App: React.FC = () => {
       connRef.current = conn;
       setStatus(TransferState.CONNECTED);
       setStatusMessage('Connected! Select a file to send.');
+      startHeartbeat(conn);
     });
 
     conn.on('data', (data: any) => {
@@ -191,6 +218,7 @@ const App: React.FC = () => {
     });
     
     conn.on('close', () => {
+        stopHeartbeat();
         if (status !== TransferState.COMPLETED) {
              setStatus(TransferState.IDLE);
              setStatusMessage('Connection closed.');
@@ -203,7 +231,7 @@ const App: React.FC = () => {
              setStatus(TransferState.FAILED);
              setStatusMessage('Connection timed out. Check ID.');
         }
-    }, 8000);
+    }, 10000);
   };
 
   // --- File Selection ---
@@ -271,10 +299,15 @@ const App: React.FC = () => {
 
   const acceptTransfer = () => {
     if (!connRef.current) return;
+    if (!connRef.current.open) {
+        alert("Connection lost. Please refresh and try again.");
+        return;
+    }
+    
     // Send approval signal
     connRef.current.send({ type: 'approve' });
     setStatus(TransferState.TRANSFERRING);
-    setStatusMessage('Waiting for data...');
+    setStatusMessage('Connecting to transfer...');
   };
 
   const rejectTransfer = () => {
@@ -335,7 +368,7 @@ const App: React.FC = () => {
                   {myId || <span className="animate-pulse">...</span>}
                 </span>
               </div>
-              <button onClick={copyLink} className="p-2 bg-gray-800 rounded-full border border-gray-700 hover:text-blue-400">
+              <button onClick={copyLink} className="p-2 bg-gray-800 rounded-full border border-gray-700 hover:text-blue-400 active:scale-95 transition-transform">
                   <Share2 size={18} />
               </button>
           </div>
@@ -346,14 +379,14 @@ const App: React.FC = () => {
       <main className="flex-1 max-w-lg w-full mx-auto p-4 flex flex-col justify-center">
         
         {/* Status Card */}
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 mb-6 shadow-xl text-center">
-            <div className="flex justify-center mb-4">
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 mb-6 shadow-xl text-center relative overflow-hidden">
+            <div className="flex justify-center mb-4 relative z-10">
                 {renderStatusIcon()}
             </div>
-            <h2 className="text-lg font-medium text-gray-200">{statusMessage}</h2>
+            <h2 className="text-lg font-medium text-gray-200 relative z-10">{statusMessage}</h2>
             
             {status === TransferState.TRANSFERRING && (
-                <div className="w-full bg-gray-800 rounded-full h-2.5 mt-4 overflow-hidden">
+                <div className="w-full bg-gray-800 rounded-full h-2.5 mt-4 overflow-hidden relative z-10">
                     <div className="bg-blue-600 h-2.5 rounded-full transition-all duration-300" style={{ width: `${progress}%` }}></div>
                 </div>
             )}
@@ -378,7 +411,7 @@ const App: React.FC = () => {
         {/* Sender View */}
         {activeTab === 'send' && (
             <div className="space-y-4 animate-fade-in">
-                {/* Connection Input (only if not connected) */}
+                {/* Connection Input */}
                 {(status === TransferState.IDLE || status === TransferState.FAILED) && (
                     <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
                         <label className="block text-gray-400 text-sm mb-2">Receiver's 6-Digit ID</label>
@@ -401,8 +434,8 @@ const App: React.FC = () => {
                     </div>
                 )}
 
-                {/* File Picker (Once Connected) */}
-                {(status === TransferState.CONNECTED || status === TransferState.COMPLETED) && (
+                {/* File Picker & Transfer Controls */}
+                {(status === TransferState.CONNECTED || status === TransferState.COMPLETED || status === TransferState.WAITING_APPROVAL) && (
                     <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
                         {!selectedFile ? (
                             <label className="flex flex-col items-center justify-center w-full h-40 border-2 border-gray-600 border-dashed rounded-xl cursor-pointer hover:bg-gray-800/80 transition-all hover:border-blue-500 group">
@@ -441,13 +474,26 @@ const App: React.FC = () => {
                                     <span>{formatBytes(selectedFile.file.size)}</span>
                                 </div>
 
-                                <button 
-                                    onClick={requestSend}
-                                    className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-xl shadow-lg shadow-blue-900/20 active:scale-95 transition-all flex items-center justify-center gap-2"
-                                >
-                                    <Send size={20} />
-                                    SEND ORIGINAL
-                                </button>
+                                {status === TransferState.WAITING_APPROVAL ? (
+                                    <div className="space-y-2">
+                                        <p className="text-center text-sm text-yellow-500 animate-pulse">Waiting for receiver to accept...</p>
+                                        <button 
+                                            onClick={startUpload}
+                                            className="w-full bg-gray-700 hover:bg-gray-600 text-white text-sm font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2"
+                                        >
+                                            <Play size={16} />
+                                            FORCE START (If stuck)
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <button 
+                                        onClick={requestSend}
+                                        className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold py-4 rounded-xl shadow-lg shadow-blue-900/20 active:scale-95 transition-all flex items-center justify-center gap-2"
+                                    >
+                                        <Send size={20} />
+                                        SEND ORIGINAL
+                                    </button>
+                                )}
                             </div>
                         )}
                     </div>
@@ -465,7 +511,7 @@ const App: React.FC = () => {
                          </div>
                          <h3 className="text-xl font-bold text-white mb-2">Ready to Receive</h3>
                          <p className="text-gray-400 text-sm">Tell the sender to enter your ID:</p>
-                         <p className="text-3xl font-mono text-green-400 font-bold mt-4 tracking-widest select-all">{myId}</p>
+                         <p className="text-3xl font-mono text-green-400 font-bold mt-4 tracking-widest select-all bg-gray-900 px-4 py-2 rounded-lg border border-gray-800">{myId}</p>
                      </div>
                  )}
 
@@ -485,7 +531,7 @@ const App: React.FC = () => {
                             </button>
                             <button 
                                 onClick={acceptTransfer}
-                                className="flex-1 py-3 bg-green-600 hover:bg-green-500 text-white rounded-xl transition-colors font-bold shadow-lg shadow-green-900/20"
+                                className="flex-1 py-3 bg-green-600 hover:bg-green-500 text-white rounded-xl transition-colors font-bold shadow-lg shadow-green-900/20 active:scale-95"
                             >
                                 Accept
                             </button>
@@ -515,6 +561,7 @@ const App: React.FC = () => {
                             {incomingMeta?.type.startsWith('video/') && (
                                 <video src={receivedFileUrl} controls className="rounded-lg mt-2 max-h-60 mx-auto border border-gray-700" />
                             )}
+                            <p className="text-xs text-gray-500 mt-2">Data cleared from memory after download.</p>
                          </div>
                      </div>
                  )}
