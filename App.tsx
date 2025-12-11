@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Peer, { DataConnection } from 'peerjs';
-import { Send, Download, ShieldCheck, FileCheck, XCircle, Loader2, Wifi, Image as ImageIcon, FileText, Smartphone, Share2, Play, UploadCloud, RefreshCw } from 'lucide-react';
+import { Send, Download, ShieldCheck, FileCheck, XCircle, Loader2, Wifi, Image as ImageIcon, FileText, Smartphone, Share2, Play, UploadCloud, RefreshCw, User, Github, Globe, Code, Heart, ArrowRight, Zap, Lock } from 'lucide-react';
 import { Footer } from './components/Footer';
 import { Modal } from './components/Modal';
 import { TransferState, FileMetadata, DataPacket, QueuedFile } from './types';
@@ -18,10 +18,14 @@ const formatBytes = (bytes: number, decimals = 2) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 };
 
-const CHUNK_SIZE = 16 * 1024; // 16KB chunks for max reliability
+const CHUNK_SIZE = 16 * 1024; // 16KB chunks
+const MAX_BUFFER_AMOUNT = 64 * 1024; // Wait if buffer > 64KB
 
 const App: React.FC = () => {
-  // --- State Management ---
+  // --- View State ---
+  const [view, setView] = useState<'home' | 'app'>('home');
+
+  // --- App State ---
   const [myId, setMyId] = useState<string>('');
   const [targetId, setTargetId] = useState<string>('');
   const [status, setStatus] = useState<TransferState>(TransferState.IDLE);
@@ -79,27 +83,26 @@ const App: React.FC = () => {
 
   // --- Initialization ---
   useEffect(() => {
+    if (view === 'home') return; // Only init peer when entering app
+
     const initPeer = () => {
       const id = generateId();
       setMyId(id);
       
       const peer = new Peer(id, {
-        debug: 1, // 0=none, 1=errors, 2=warnings, 3=all
+        debug: 1,
         config: {
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
-            { urls: 'stun:global.stun.twilio.com:3478' }
           ],
-          sdpSemantics: 'unified-plan', // Modern WebRTC standard
-          iceCandidatePoolSize: 10, // Pre-fetch candidates for faster local connection
+          sdpSemantics: 'unified-plan',
         }
       });
 
       peer.on('open', (id) => {
         setStatus(TransferState.IDLE);
-        setStatusMessage('Online and ready');
+        setStatusMessage('Online. Connect via Same Wi-Fi.');
       });
 
       peer.on('connection', (conn) => {
@@ -114,7 +117,7 @@ const App: React.FC = () => {
           setStatusMessage('Peer not found. Check ID.');
           setStatus(TransferState.FAILED);
         } else {
-          setStatusMessage('Connection unstable. Retrying...');
+          setStatusMessage('Network issue. Retrying...');
           setTimeout(initPeer, 2000);
         }
       });
@@ -129,7 +132,7 @@ const App: React.FC = () => {
       peerRef.current?.destroy();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [view]);
 
   // --- Connection Logic for RECEIVER ---
   const handleIncomingConnection = (conn: DataConnection) => {
@@ -319,13 +322,21 @@ const App: React.FC = () => {
     const file = selectedFile.file;
     let offset = 0;
 
-    // 2. Loop and send chunks
+    // 2. Loop and send chunks with Backpressure Control
     while(offset < file.size) {
-        // If connection dropped, stop
+        // Connection Check
         if (!connRef.current.open) {
             setStatus(TransferState.FAILED);
             setStatusMessage('Connection lost during transfer');
             return;
+        }
+
+        // Backpressure: If buffer is full, wait.
+        // Cast to any because DataConnection type defs might miss dataChannel property depending on version
+        const dc = (connRef.current as any).dataChannel;
+        if (dc && dc.bufferedAmount > MAX_BUFFER_AMOUNT) {
+            await new Promise(r => setTimeout(r, 50));
+            continue; // Re-check buffer
         }
 
         const chunk = file.slice(offset, offset + CHUNK_SIZE);
@@ -339,9 +350,6 @@ const App: React.FC = () => {
         offset += CHUNK_SIZE;
         const percent = Math.min(100, Math.round((offset / file.size) * 100));
         setProgress(percent);
-
-        // Throttle slightly to prevent buffer overflow/freeze UI
-        await new Promise(r => setTimeout(r, 10));
     }
 
     // 3. Send end signal
@@ -377,7 +385,7 @@ const App: React.FC = () => {
       setReceivedFileUrl(null);
       setSelectedFile(null);
       setProgress(0);
-      setStatusMessage('Online and ready');
+      setStatusMessage('Online. Connect via Same Wi-Fi.');
     }
   };
 
@@ -402,34 +410,143 @@ const App: React.FC = () => {
     }
   };
 
-  return (
-    <div className="min-h-screen bg-gray-950 flex flex-col font-sans selection:bg-pink-500 selection:text-white">
-      {/* Header */}
-      <header className="p-4 bg-gray-900/50 backdrop-blur-md border-b border-gray-800 sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="text-green-400" size={28} />
-            <h1 className="text-xl font-bold bg-gradient-to-r from-green-400 to-blue-500 bg-clip-text text-transparent hidden sm:block">
-              PrivateShare
-            </h1>
-          </div>
-          <div className="flex gap-2">
-              <div className="bg-gray-800 px-3 py-1 rounded-full border border-gray-700 flex items-center">
-                <span className="text-xs text-gray-400 uppercase mr-2 hidden sm:inline">ID:</span>
-                <span className="font-mono font-bold text-green-400 text-lg tracking-widest">
-                  {myId || <span className="animate-pulse">...</span>}
-                </span>
-              </div>
-              <button onClick={copyLink} className="p-2 bg-gray-800 rounded-full border border-gray-700 hover:text-blue-400 active:scale-95 transition-transform">
-                  <Share2 size={18} />
-              </button>
-          </div>
-        </div>
-      </header>
+  // --- Views ---
 
-      {/* Main Content */}
-      <main className="flex-1 max-w-lg w-full mx-auto p-4 flex flex-col justify-center">
+  const renderHome = () => (
+    <div className="flex-1 max-w-4xl mx-auto w-full p-4 flex flex-col gap-12 animate-fade-in pb-20">
+      
+      {/* Hero Section */}
+      <section className="text-center space-y-6 pt-10">
+        <div className="flex justify-center mb-6">
+           <div className="bg-gray-800 p-4 rounded-3xl border border-gray-700 shadow-2xl shadow-blue-900/20">
+             <ShieldCheck size={64} className="text-green-400" />
+           </div>
+        </div>
+        <h1 className="text-4xl md:text-6xl font-bold bg-gradient-to-r from-green-400 via-blue-500 to-purple-500 bg-clip-text text-transparent pb-2">
+          PrivateShare P2P
+        </h1>
+        <p className="text-xl text-gray-400 max-w-xl mx-auto">
+          Secure, direct file sharing. No cloud, no limits, original quality preserved.
+        </p>
         
+        <div className="bg-gray-900/50 p-6 rounded-2xl border border-gray-800 max-w-lg mx-auto text-left space-y-4">
+            <h3 className="font-bold text-lg text-white flex items-center gap-2">
+                <Wifi size={20} className="text-yellow-500"/>
+                Important: Connection Setup
+            </h3>
+            <ul className="space-y-3 text-sm text-gray-400">
+                <li className="flex items-start gap-2">
+                    <span className="bg-gray-800 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs mt-0.5">1</span>
+                    Connect both devices to the <b>same Wi-Fi network</b> or use a <b>Mobile Hotspot</b>.
+                </li>
+                <li className="flex items-start gap-2">
+                    <span className="bg-gray-800 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs mt-0.5">2</span>
+                    Open this website on both devices.
+                </li>
+                <li className="flex items-start gap-2">
+                    <span className="bg-gray-800 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs mt-0.5">3</span>
+                    Enter the Receiver's ID on the Sender's phone.
+                </li>
+            </ul>
+        </div>
+
+        <button 
+          onClick={() => setView('app')}
+          className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 px-10 rounded-full shadow-lg shadow-blue-900/30 active:scale-95 transition-all text-lg flex items-center gap-3 mx-auto"
+        >
+          Start Sharing <ArrowRight size={20} />
+        </button>
+      </section>
+
+      {/* Developer About Section */}
+      <section className="border-t border-gray-800 pt-12 mt-12">
+        <div className="bg-gray-900/40 rounded-3xl border border-gray-800 overflow-hidden">
+            
+            {/* Header / Banner */}
+            <div className="bg-gradient-to-r from-gray-900 to-gray-800 p-8 border-b border-gray-800 flex flex-col md:flex-row items-center gap-6">
+                <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-blue-500 to-purple-600 p-[2px]">
+                    <div className="w-full h-full rounded-full bg-gray-900 flex items-center justify-center overflow-hidden">
+                        <User size={48} className="text-gray-400" />
+                    </div>
+                </div>
+                <div className="text-center md:text-left">
+                    <h2 className="text-3xl font-bold text-white mb-2">Rishabh Kumar</h2>
+                    <p className="text-gray-400 italic mb-3">"Technology is my life."</p>
+                    <div className="flex flex-wrap justify-center md:justify-start gap-2">
+                        {['#google', '#webdev', '#python', '#programming'].map(tag => (
+                            <span key={tag} className="text-xs bg-gray-800 text-blue-400 px-2 py-1 rounded-md border border-gray-700">{tag}</span>
+                        ))}
+                    </div>
+                </div>
+            </div>
+
+            {/* Content Body */}
+            <div className="p-8 space-y-8">
+                
+                <div>
+                    <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                        <Code className="text-blue-500" /> Introduction
+                    </h3>
+                    <p className="text-gray-400 leading-relaxed">
+                        Rishabh Sahil is a passionate Full Stack Developer, Open Source Contributor, and Software Engineer from 🇮🇳 India, with over 4+ years of experience in the software development industry. He specializes in building powerful web applications, scalable backend systems, and AI-powered tools.
+                    </p>
+                </div>
+
+                <div className="grid md:grid-cols-2 gap-8">
+                    <div>
+                        <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                            <Github className="text-purple-500" /> Open Source
+                        </h3>
+                        <ul className="space-y-3">
+                            {[
+                                { name: "Rishabh Search Engine", desc: "Fast & lightweight search engine." },
+                                { name: "AI Personal Assistant", desc: "Automates daily tasks & productivity." },
+                                { name: "AI Jarvis WhatsApp Bot", desc: "Smart AI bot in Java." }
+                            ].map((item, i) => (
+                                <li key={i} className="bg-gray-800/50 p-3 rounded-xl border border-gray-700/50">
+                                    <div className="font-semibold text-gray-200">{item.name}</div>
+                                    <div className="text-xs text-gray-500">{item.desc}</div>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+
+                    <div>
+                         <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                            <Heart className="text-red-500" /> Vision & Beliefs
+                        </h3>
+                        <p className="text-gray-400 text-sm leading-relaxed mb-4">
+                            Rishabh believes in the power of continuous learning, innovation, and contributing to the global open-source community. His work is driven by the idea that technology can make life easier, smarter, and more connected.
+                        </p>
+                    </div>
+                </div>
+                
+                {/* Social Links Grid */}
+                <div>
+                     <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                        <Globe className="text-green-500" /> Connect & Explore
+                    </h3>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        <a href="https://github.com/rishabhsahill" target="_blank" className="flex items-center gap-2 p-3 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors text-sm text-gray-300">
+                            <Github size={16} /> GitHub Profile
+                        </a>
+                        <a href="https://rishabhsahil.vercel.app/" target="_blank" className="flex items-center gap-2 p-3 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors text-sm text-gray-300">
+                            <Globe size={16} /> Portfolio
+                        </a>
+                         <a href="https://instagram.com/rishabhsahill" target="_blank" className="flex items-center gap-2 p-3 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors text-sm text-gray-300">
+                            <Zap size={16} /> Instagram
+                        </a>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+      </section>
+    </div>
+  );
+
+  const renderApp = () => (
+    <div className="flex-1 max-w-lg w-full mx-auto p-4 flex flex-col justify-center animate-fade-in">
         {/* Status Card */}
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 mb-6 shadow-xl text-center relative overflow-hidden">
             <div className="flex justify-center mb-4 relative z-10">
@@ -443,7 +560,6 @@ const App: React.FC = () => {
                 </div>
             )}
             
-            {/* Show retry if stuck on 'Connecting to transfer...' in receiver mode */}
             {status === TransferState.TRANSFERRING && statusMessage.includes('Connecting to transfer') && (
                 <div className="mt-4 relative z-10">
                     <button 
@@ -475,7 +591,6 @@ const App: React.FC = () => {
         {/* Sender View */}
         {activeTab === 'send' && (
             <div className="space-y-4 animate-fade-in">
-                {/* Connection Input - FIXED FOR MOBILE */}
                 {(status === TransferState.IDLE || status === TransferState.FAILED) && (
                     <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
                         <label className="block text-gray-400 text-sm mb-2">Receiver's 6-Digit ID</label>
@@ -498,7 +613,6 @@ const App: React.FC = () => {
                     </div>
                 )}
 
-                {/* File Picker & Transfer Controls - DRAG & DROP ENABLED */}
                 {(status === TransferState.CONNECTED || status === TransferState.COMPLETED || status === TransferState.WAITING_APPROVAL) && (
                     <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700"
                          onDragOver={handleDragOver}
@@ -636,7 +750,6 @@ const App: React.FC = () => {
              </div>
         )}
 
-        {/* Global Reset Button for completed flow */}
         {(status === TransferState.COMPLETED || status === TransferState.FAILED) && (
             <button 
                 onClick={reset}
@@ -645,8 +758,38 @@ const App: React.FC = () => {
                 Start New Transfer
             </button>
         )}
+    </div>
+  );
 
-      </main>
+  return (
+    <div className="min-h-screen bg-gray-950 flex flex-col font-sans selection:bg-pink-500 selection:text-white">
+      {/* Header */}
+      <header className="p-4 bg-gray-900/50 backdrop-blur-md border-b border-gray-800 sticky top-0 z-10">
+        <div className="max-w-4xl mx-auto flex justify-between items-center">
+          <div className="flex items-center gap-2 cursor-pointer" onClick={() => setView('home')}>
+            <ShieldCheck className="text-green-400" size={28} />
+            <h1 className="text-xl font-bold bg-gradient-to-r from-green-400 to-blue-500 bg-clip-text text-transparent hidden sm:block">
+              PrivateShare
+            </h1>
+          </div>
+          <div className="flex gap-2 items-center">
+              {view === 'app' && (
+                  <div className="bg-gray-800 px-3 py-1 rounded-full border border-gray-700 flex items-center">
+                    <span className="text-xs text-gray-400 uppercase mr-2 hidden sm:inline">ID:</span>
+                    <span className="font-mono font-bold text-green-400 text-lg tracking-widest">
+                      {myId || <span className="animate-pulse">...</span>}
+                    </span>
+                  </div>
+              )}
+              <button onClick={copyLink} className="p-2 bg-gray-800 rounded-full border border-gray-700 hover:text-blue-400 active:scale-95 transition-transform">
+                  <Share2 size={18} />
+              </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content Area */}
+      {view === 'home' ? renderHome() : renderApp()}
 
       <Footer />
     </div>
