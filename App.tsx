@@ -477,7 +477,7 @@ const App: React.FC = () => {
 
                  <div className="space-y-4 flex-1">
                      <div>
-                         <h2 className="text-2xl font-bold text-white mb-1">Hey, I'm Rishabh Sahil.</h2>
+                         <h2 className="text-2xl font-bold text-white mb-1">Hey, I'm Rishabh Kumar.</h2>
                          <p className="text-sm text-blue-400 font-medium">Full Stack Developer 🇮🇳</p>
                      </div>
                      
