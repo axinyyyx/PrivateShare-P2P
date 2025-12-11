@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Peer, { DataConnection } from 'peerjs';
-import { Send, Download, ShieldCheck, FileCheck, XCircle, Loader2, Wifi, Image as ImageIcon, FileText, Smartphone, Share2, Play, UploadCloud, RefreshCw, User, Github, Globe, Code, Heart, ArrowRight, Zap, Lock } from 'lucide-react';
+import { Send, Download, ShieldCheck, FileCheck, XCircle, Loader2, Wifi, Image as ImageIcon, FileText, Smartphone, Share2, Play, UploadCloud, RefreshCw, User, Github, Globe, Code, Heart, ArrowRight, Zap, Lock, Instagram } from 'lucide-react';
 import { Footer } from './components/Footer';
 import { Modal } from './components/Modal';
 import { TransferState, FileMetadata, DataPacket, QueuedFile } from './types';
@@ -18,8 +18,9 @@ const formatBytes = (bytes: number, decimals = 2) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 };
 
-const CHUNK_SIZE = 16 * 1024; // 16KB chunks
-const MAX_BUFFER_AMOUNT = 64 * 1024; // Wait if buffer > 64KB
+// Optimized for Local Wi-Fi (LAN) Speed
+const CHUNK_SIZE = 32 * 1024; // 32KB chunks for balance
+const MAX_BUFFER_AMOUNT = 1024 * 1024; // 1MB Buffer - Allows faster bursts on LAN
 
 const App: React.FC = () => {
   // --- View State ---
@@ -95,8 +96,12 @@ const App: React.FC = () => {
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' }
           ],
           sdpSemantics: 'unified-plan',
+          iceCandidatePoolSize: 10, // Pre-fetch candidates for faster local connection
         }
       });
 
@@ -314,15 +319,15 @@ const App: React.FC = () => {
     // 1. Send signal start
     connRef.current.send({ type: 'file-start' });
 
+    // 2. Loop and send chunks with Optimized Backpressure for LAN
     // Brief pause to ensure Receiver is ready to receive data
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, 200));
 
     setStatusMessage('Sending file...');
 
     const file = selectedFile.file;
     let offset = 0;
 
-    // 2. Loop and send chunks with Backpressure Control
     while(offset < file.size) {
         // Connection Check
         if (!connRef.current.open) {
@@ -331,12 +336,12 @@ const App: React.FC = () => {
             return;
         }
 
-        // Backpressure: If buffer is full, wait.
-        // Cast to any because DataConnection type defs might miss dataChannel property depending on version
+        // Backpressure Control
         const dc = (connRef.current as any).dataChannel;
         if (dc && dc.bufferedAmount > MAX_BUFFER_AMOUNT) {
+            // Wait for buffer to drain significantly
             await new Promise(r => setTimeout(r, 50));
-            continue; // Re-check buffer
+            continue; 
         }
 
         const chunk = file.slice(offset, offset + CHUNK_SIZE);
@@ -426,26 +431,28 @@ const App: React.FC = () => {
           PrivateShare P2P
         </h1>
         <p className="text-xl text-gray-400 max-w-xl mx-auto">
-          Secure, direct file sharing. No cloud, no limits, original quality preserved.
+          Instant, limitless file sharing over Local Wi-Fi. 
+          <br/>
+          <span className="text-blue-400 font-semibold">Original Quality. No Cloud. Secure.</span>
         </p>
         
         <div className="bg-gray-900/50 p-6 rounded-2xl border border-gray-800 max-w-lg mx-auto text-left space-y-4">
             <h3 className="font-bold text-lg text-white flex items-center gap-2">
                 <Wifi size={20} className="text-yellow-500"/>
-                Important: Connection Setup
+                How to Connect Instantly
             </h3>
             <ul className="space-y-3 text-sm text-gray-400">
                 <li className="flex items-start gap-2">
                     <span className="bg-gray-800 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs mt-0.5">1</span>
-                    Connect both devices to the <b>same Wi-Fi network</b> or use a <b>Mobile Hotspot</b>.
+                    Connect both devices to the <b>Same Wi-Fi</b> or use a <b>Mobile Hotspot</b>.
                 </li>
                 <li className="flex items-start gap-2">
                     <span className="bg-gray-800 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs mt-0.5">2</span>
-                    Open this website on both devices.
+                    Open this app on both devices.
                 </li>
                 <li className="flex items-start gap-2">
                     <span className="bg-gray-800 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs mt-0.5">3</span>
-                    Enter the Receiver's ID on the Sender's phone.
+                    Enter the ID and tap Send. The transfer will be direct and super fast.
                 </li>
             </ul>
         </div>
@@ -460,85 +467,35 @@ const App: React.FC = () => {
 
       {/* Developer About Section */}
       <section className="border-t border-gray-800 pt-12 mt-12">
-        <div className="bg-gray-900/40 rounded-3xl border border-gray-800 overflow-hidden">
+        <div className="bg-gray-900/40 rounded-3xl border border-gray-800 overflow-hidden relative">
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-green-400 to-blue-500"></div>
             
-            {/* Header / Banner */}
-            <div className="bg-gradient-to-r from-gray-900 to-gray-800 p-8 border-b border-gray-800 flex flex-col md:flex-row items-center gap-6">
-                <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-blue-500 to-purple-600 p-[2px]">
-                    <div className="w-full h-full rounded-full bg-gray-900 flex items-center justify-center overflow-hidden">
-                        <User size={48} className="text-gray-400" />
-                    </div>
-                </div>
-                <div className="text-center md:text-left">
-                    <h2 className="text-3xl font-bold text-white mb-2">Rishabh Kumar</h2>
-                    <p className="text-gray-400 italic mb-3">"Technology is my life."</p>
-                    <div className="flex flex-wrap justify-center md:justify-start gap-2">
-                        {['#google', '#webdev', '#python', '#programming'].map(tag => (
-                            <span key={tag} className="text-xs bg-gray-800 text-blue-400 px-2 py-1 rounded-md border border-gray-700">{tag}</span>
-                        ))}
-                    </div>
-                </div>
-            </div>
+            <div className="p-8 flex flex-col md:flex-row gap-8 items-start">
+                 <div className="w-20 h-20 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shrink-0 shadow-lg">
+                    <User size={40} className="text-white" />
+                 </div>
 
-            {/* Content Body */}
-            <div className="p-8 space-y-8">
-                
-                <div>
-                    <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
-                        <Code className="text-blue-500" /> Introduction
-                    </h3>
-                    <p className="text-gray-400 leading-relaxed">
-                        Rishabh Sahil is a passionate Full Stack Developer, Open Source Contributor, and Software Engineer from 🇮🇳 India, with over 4+ years of experience in the software development industry. He specializes in building powerful web applications, scalable backend systems, and AI-powered tools.
-                    </p>
-                </div>
+                 <div className="space-y-4 flex-1">
+                     <div>
+                         <h2 className="text-2xl font-bold text-white mb-1">Hey, I'm Rishabh Sahil.</h2>
+                         <p className="text-sm text-blue-400 font-medium">Full Stack Developer 🇮🇳</p>
+                     </div>
+                     
+                     <p className="text-gray-300 leading-relaxed max-w-2xl">
+                        I'm a software engineer who loves building tools that are actually useful. 
+                        I created <span className="text-white font-semibold">PrivateShare</span> because I believe your files should stay yours—no clouds, no compression, and no middleman.
+                        Just you and your friends, sharing directly. Technology is my life, and I'm always building something new.
+                     </p>
 
-                <div className="grid md:grid-cols-2 gap-8">
-                    <div>
-                        <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
-                            <Github className="text-purple-500" /> Open Source
-                        </h3>
-                        <ul className="space-y-3">
-                            {[
-                                { name: "Rishabh Search Engine", desc: "Fast & lightweight search engine." },
-                                { name: "AI Personal Assistant", desc: "Automates daily tasks & productivity." },
-                                { name: "AI Jarvis WhatsApp Bot", desc: "Smart AI bot in Java." }
-                            ].map((item, i) => (
-                                <li key={i} className="bg-gray-800/50 p-3 rounded-xl border border-gray-700/50">
-                                    <div className="font-semibold text-gray-200">{item.name}</div>
-                                    <div className="text-xs text-gray-500">{item.desc}</div>
-                                </li>
-                            ))}
-                        </ul>
-                    </div>
-
-                    <div>
-                         <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
-                            <Heart className="text-red-500" /> Vision & Beliefs
-                        </h3>
-                        <p className="text-gray-400 text-sm leading-relaxed mb-4">
-                            Rishabh believes in the power of continuous learning, innovation, and contributing to the global open-source community. His work is driven by the idea that technology can make life easier, smarter, and more connected.
-                        </p>
-                    </div>
-                </div>
-                
-                {/* Social Links Grid */}
-                <div>
-                     <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
-                        <Globe className="text-green-500" /> Connect & Explore
-                    </h3>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                        <a href="https://github.com/rishabhsahill" target="_blank" className="flex items-center gap-2 p-3 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors text-sm text-gray-300">
-                            <Github size={16} /> GitHub Profile
-                        </a>
-                        <a href="https://rishabhsahil.vercel.app/" target="_blank" className="flex items-center gap-2 p-3 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors text-sm text-gray-300">
+                     <div className="flex gap-4 pt-2">
+                        <a href="https://rishabhsahil.vercel.app/" target="_blank" className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-white text-sm transition-colors border border-gray-700">
                             <Globe size={16} /> Portfolio
                         </a>
-                         <a href="https://instagram.com/rishabhsahill" target="_blank" className="flex items-center gap-2 p-3 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors text-sm text-gray-300">
+                        <a href="https://instagram.com/rishabhsahill" target="_blank" className="flex items-center gap-2 px-4 py-2 bg-gradient-to-br from-pink-600 to-orange-500 hover:opacity-90 rounded-lg text-white text-sm transition-opacity shadow-lg">
                             <Zap size={16} /> Instagram
                         </a>
-                    </div>
-                </div>
-
+                     </div>
+                 </div>
             </div>
         </div>
       </section>
